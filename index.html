@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+  <title>コーギーふくわらい</title>
+  <style>
+    :root { --btn-pad: clamp(20px, 6vw, 40px); }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      font-family: sans-serif;
+    }
+    canvas {
+      border: 1px solid #333;
+      margin-top: 10px;
+      touch-action: none;
+    }
+    #controlButton {
+      position: fixed;
+      left: 50%;
+      bottom: calc(env(safe-area-inset-bottom) + 12px);
+      transform: translateX(-50%);
+      padding: var(--btn-pad) calc(var(--btn-pad) * 2);
+      font-size: 0;
+      background: #9bd7ff;
+      border: none;
+      border-radius: 50px;
+      cursor: pointer;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+      touch-action: manipulation;
+      z-index: 10;
+    }
+    #controlButton:active {
+      background: #7bbfe0;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+  <button id="controlButton"></button>
+
+  <script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    const button = document.getElementById("controlButton");
+
+    // 論理サイズ（描画の基準）とスケール
+    let LW = 720, LH = 720; // 論理キャンバス幅・高さ
+    let S  = 1;             // 画像・速度などのスケール係数
+
+    // レイアウト：画面に収まる最大の正方形へ
+    function layout() {
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      const buttonSpace = Math.max(120, window.innerHeight * 0.18);
+      const size = Math.min(window.innerWidth - 16, window.innerHeight - buttonSpace);
+      const cssSize = Math.max(240, Math.floor(size));
+
+      LW = LH = cssSize;
+      S = LW / 720; // ★画像描画の基準スケール
+
+      // CSSピクセルサイズ
+      canvas.style.width = cssSize + "px";
+      canvas.style.height = cssSize + "px";
+
+      // 実ピクセル（高DPI対応）
+      canvas.width  = Math.floor(cssSize * dpr);
+      canvas.height = Math.floor(cssSize * dpr);
+      // 論理座標＝CSSピクセルに揃える
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    window.addEventListener("resize", layout);
+    layout();
+
+    // ヘルパー：中心座標(cx,cy)にスケール付きで描画
+    function drawCentered(img, cx, cy, k = 1) {
+      if (!img.complete || !img.naturalWidth) return;
+      const w = img.naturalWidth  * S * k;
+      const h = img.naturalHeight * S * k;
+      ctx.drawImage(img, cx - w/2, cy - h/2, w, h);
+    }
+
+    // 状態
+    let mode = "start"; // "start" or "play"
+    const faceImg = new Image();
+    faceImg.src = "face.png";
+
+    // パーツ
+    const partFiles = ["イラスト.png","鼻.png","目１.png","目２.png","耳１.png","耳２.png"];
+    let parts = [];
+    let currentIndex = 0;
+
+    class Part {
+      constructor(src, x, y) {
+        this.img = new Image();
+        this.img.src = src;
+        this.x = x;
+        this.y = y;
+        // 速度・範囲も画面サイズに応じてスケールしたいなら S を掛ける
+        this.vx = 30 * S;
+        this.vy = 30 * S;
+        this.margin = 40 * S;
+        this.alpha = 1.0;
+        this.state = "wait"; // wait,h,v,fade,hidden,show
+      }
+      update() {
+        if (this.state === "h") {
+          this.x += this.vx;
+          if (this.x < -this.margin || this.x > LW + this.margin) this.vx = -this.vx;
+        } else if (this.state === "v") {
+          this.y += this.vy;
+          if (this.y < -this.margin || this.y > LH + this.margin) this.vy = -this.vy;
+        } else if (this.state === "fade") {
+          this.alpha -= 0.05;
+          if (this.alpha <= 0) { this.alpha = 0; this.state = "hidden"; }
+        }
+      }
+      draw() {
+        if (["h","v","fade","show"].includes(this.state)) {
+          ctx.globalAlpha = this.alpha;
+          drawCentered(this.img, this.x, this.y); // ★サイズは自動調整
+          ctx.globalAlpha = 1.0;
+        }
+      }
+      nextState() {
+        if (this.state === "h") { this.vx = 0; this.state = "v"; }
+        else if (this.state === "v") { this.vy = 0; this.state = "fade"; }
+      }
+    }
+
+    function init() {
+      parts = [];
+      for (let i = 0; i < partFiles.length; i++) {
+        parts.push(new Part(partFiles[i], LW/2, LH/4));
+      }
+      currentIndex = 0;
+      parts[0].state = "h";
+    }
+
+    // すぐ反応させる
+    function handleButtonPress(e) {
+      e?.preventDefault();
+      if (mode === "start") {
+        init();
+        mode = "play";
+        return;
+      }
+      if (mode === "play") {
+        if (currentIndex < parts.length) {
+          parts[currentIndex].nextState();
+          if (parts[currentIndex].state === "fade") {
+            currentIndex++;
+            if (currentIndex < parts.length) parts[currentIndex].state = "h";
+          }
+        } else {
+          mode = "start"; // もういちど
+        }
+      }
+    }
+    button.addEventListener("pointerdown", handleButtonPress);
+
+    function loop() {
+      ctx.clearRect(0, 0, LW, LH);
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, LW, LH);
+
+      if (mode === "start") {
+        // スタート画面：face.png を中央やや上に（必要なら k で縮小拡大）
+        drawCentered(faceImg, LW/2, LH/4, 1.0);
+        ctx.fillStyle = "#000";
+        ctx.font = `${Math.round(36 * S)}px sans-serif`;
+        ctx.textAlign = "center";
+        ctx.fillText("ふくわらい", LW/2, Math.round(60 * S));
+      } else {
+        // プレイ
+        if (currentIndex < parts.length) parts[currentIndex].update();
+        for (const p of parts) {
+          if (p.state === "fade") p.update();
+          p.draw();
+        }
+        if (currentIndex >= parts.length) {
+          if (parts.every(p => p.state === "hidden")) {
+            for (const p of parts) { p.state = "show"; p.alpha = 1.0; }
+          }
+        }
+      }
+      requestAnimationFrame(loop);
+    }
+    loop();
+  </script>
+</body>
+</html>
